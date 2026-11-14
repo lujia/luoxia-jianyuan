@@ -445,6 +445,45 @@ try {
   G.GS.mode = "walk";
 } catch (e) { crash(e, "10.6 空队伍"); }
 
+/* ================= 10.8 升级曲线与法术习得可达性 ================= */
+/* 回归：旧曲线 28*lv^1.55 下，野外单场约 17 点经验、洞穴约 36 点，
+ * 正常通关（十几场战斗）都学不到主角 3 级的落雷符 —— 法术系统形同虚设。
+ * 这里锁定"合理场次内必须学会"。 */
+console.log("\n[10.8] 升级曲线可达性");
+try {
+  G.mainStart(false);
+  let n0 = 0;
+  while (G.GS.mode === "dialog" && n0++ < 60) { G.Dlg.chars = 999; tap(" "); }
+  const h = G.GS.party[0];
+  ok(h.level === 1 && h.magic.length === 1, "新游戏主角 1 级、只会 1 个法术（前置）");
+  /* 模拟野外平均 6 场战斗（wolf / wolf×2 / wolf+boar 轮流） */
+  const FIELD = [["wolf"], ["wolf", "wolf"], ["wolf", "boar"]];
+  for (let i = 0; i < 6; i++) {
+    G.Battle.start(FIELD[i % 3].map(k => G.Data.ENEMIES[k]), false);
+    G.Battle.enemies.forEach(e => { e.hp = 0; e.alive = false; });
+    G.Battle.finished = true; G.Battle.victory = true;
+    G.Battle.grantRewards();
+    G.GS.mode = "walk";
+  }
+  ok(h.level >= 3, "野外 6 场战斗后主角至少 3 级（旧曲线只有 2 级）");
+  ok(h.magic.includes("luoLei"), "此时已习得落雷符（旧曲线学不到）");
+  /* 再打几场洞穴战斗，沈月应能学到 5 级的霜风咒 */
+  const CAVE = [["bat"], ["bat", "bat"], ["beetle", "bat"], ["beetle", "beetle"]];
+  G.GS.flags.joined = true;
+  if (!G.GS.party.find(a => a.id === "yue")) G.GS.party.push(G.makeActor("yue"));
+  for (let i = 0; i < 10; i++) {
+    G.Battle.start(CAVE[i % 4].map(k => G.Data.ENEMIES[k]), false);
+    G.Battle.enemies.forEach(e => { e.hp = 0; e.alive = false; });
+    G.Battle.finished = true; G.Battle.victory = true;
+    G.Battle.grantRewards();
+    G.GS.mode = "walk";
+  }
+  const yue = G.GS.party.find(a => a.id === "yue");
+  ok(yue.level >= 5 && yue.magic.includes("shuangFeng"),
+     "洞穴 10 场后沈月 5 级并习得霜风咒");
+  ok(h.level <= 9, "等级不会失控膨胀（仍在合理区间）");
+} catch (e) { crash(e, "10.8 升级曲线"); }
+
 /* ================= 10.7 任务道具不可消耗 ================= */
 console.log("\n[10.7] 任务道具不可消耗（雪莲）");
 try {
