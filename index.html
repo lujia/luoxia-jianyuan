@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>落霞剑缘 · 经典JRPG引擎复刻（原创致敬版）</title>
+<style>
+  html,body{margin:0;padding:0;background:#101018;height:100%;display:flex;
+    align-items:center;justify-content:center;overflow:hidden}
+  #wrap{position:relative}
+  canvas{image-rendering:pixelated;image-rendering:crisp-edges;
+    border:4px solid #2a2a3a;border-radius:4px;
+    box-shadow:0 0 40px #000a}
+  #tip{position:absolute;left:0;right:0;bottom:-28px;text-align:center;
+    color:#8a8aa0;font:12px/1.6 monospace;user-select:none}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="screen" width="960" height="600"></canvas>
+  <div id="tip">方向键/WASD 移动 · 空格/回车/点击 确认·对话 · Tab/I 状态 · C 继续 · N 音乐 · Esc 存档菜单/取消</div>
+</div>
+<!-- 分层结构对应经典引擎的数据/逻辑分离：
+     pat.js  ≈ PAT.MKF(图块)   mgo.js   ≈ MGO.MKF(行走精灵)
+     data.js ≈ DATA.MKF(数值)  maps.js  ≈ MAP.MKF+RNG.MKF(场景)
+     script.js ≈ SSS.MKF(事件脚本)  engine.js=引擎核心  battle.js=战斗 -->
+<script src="assets/art_manifest.js"></script>
+<script src="src/pat.js"></script>
+<script src="src/mgo.js"></script>
+<script src="src/art.js"></script>
+<script src="src/data.js"></script>
+<script src="src/maps.js"></script>
+<script src="src/script.js"></script>
+<script src="src/engine.js"></script>
+<script src="src/battle.js"></script>
+<script src="src/main.js"></script>
+</body>
+</html>
