@@ -13,7 +13,7 @@ const VIEW_TH = VH / TILE;           // 视口行数 12.5
 
 /* ---------------- 全局游戏状态 ---------------- */
 const GS = {
-  mode: "title",                     // title/walk/dialog/shop/status/battle/gameover/ending/menu
+  mode: "title",                     // title/walk/dialog/shop/status/battle/ending/menu
   sceneId: "village",
   scene: null,
   px: 0, py: 0,                      // 玩家像素位置（精灵左上角）
@@ -23,7 +23,7 @@ const GS = {
   gold: 40,
   items: {},                        // {itemId: count}
   flags: {},
-  steps: 0, encounterMeter: 0,
+  encounterMeter: 0,
   followers: [],                     // 跟随者位置历史（沈月跟随）
   keys: {},
   tick: 0,
@@ -45,7 +45,10 @@ function makeActor(id) {
 }
 
 /* ---------------- 主循环 ---------------- */
-let cvs, ctx, scale = 3, rafLast = 0;
+let cvs, ctx, rafLast = 0;
+/* renderScale：逻辑坐标 → 后备画布像素的倍率（由 fitScale 反算，含 DPR）。
+ * scale：逻辑坐标 → CSS 像素的倍率（仅供调试/外部读取）。 */
+let renderScale = 3, scale = 3;
 
 function boot() {
   cvs = document.getElementById("screen");
@@ -68,11 +71,45 @@ function boot() {
 }
 
 function fitScale() {
-  const w = Math.max(1, Math.floor(window.innerWidth / VW));
-  const h = Math.max(1, Math.floor(window.innerHeight / VH));
-  scale = Math.max(1, Math.min(w, h));
-  cvs.style.width = VW * scale + "px";
-  cvs.style.height = VH * scale + "px";
+  /* 缩放策略（旧版实测缺陷）：
+   * 旧版按 VW=320 取整数倍算出 CSS 尺寸，但画布后备分辨率写死 960×600
+   * （320×RS3）。CSS 960→1280 就是 1.333× 非整数拉伸，全屏发虚；只有
+   * 1366×768 这一种窗口恰好 scale=3 才清晰。
+   *
+   * 现在改为「按物理像素反推」：先求物理像素下的整数倍 n，
+   * 令后备分辨率 = VW*n，CSS 尺寸 = VW*n/dpr。
+   * 于是 CSS×DPR 恒等于后备分辨率（1:1 映射），且 1 逻辑像素 = n 物理像素
+   * —— 任何窗口、任何 DPR（含 1.5/1.25 这类分数）下都保持锐利。
+   * 代价是 CSS 尺寸可能是小数（如 1066.67px），浏览器布局完全支持。 */
+  const dpr = window.devicePixelRatio || 1;
+  const BORDER = 8;        // canvas 的 4px 边框 × 2
+  const TIP = 32;          // 底部操作提示条占位（12px 字 + 行高 + 间距）
+  const maxW = Math.max(120, window.innerWidth - BORDER - 8);
+  const maxH = Math.max(80, window.innerHeight - BORDER - TIP);
+  /* 物理像素下的整数倍；窗口太小时退化为 0，走按比例缩小的分支 */
+  const nw = Math.floor(maxW * dpr / VW);
+  const nh = Math.floor(maxH * dpr / VH);
+  const n = Math.min(nw, nh);
+  let cssW, cssH, bw, bh;
+  if (n >= 1) {
+    bw = VW * n; bh = VH * n;
+    cssW = bw / dpr; cssH = bh / dpr;
+  } else {
+    /* 极小窗口：CSS 尺寸尽量铺满，后备按 DPR 走（此时必然有损，但完整可见） */
+    const f = Math.min(maxW / VW, maxH / VH);
+    cssW = Math.max(160, Math.floor(VW * f));
+    cssH = Math.max(100, Math.floor(VH * f));
+    bw = Math.max(1, Math.round(cssW * dpr));
+    bh = Math.max(1, Math.round(cssH * dpr));
+  }
+  cvs.style.width = cssW + "px";
+  cvs.style.height = cssH + "px";
+  if (cvs.width !== bw || cvs.height !== bh) {
+    cvs.width = bw; cvs.height = bh;
+    ctx.imageSmoothingEnabled = false;   // 改尺寸会重置上下文状态，必须重设
+  }
+  renderScale = bw / VW;                 // 逻辑 → 后备像素（整数）
+  scale = cssW / VW;                     // 逻辑 → CSS 像素
 }
 
 function loop(ts) {
@@ -106,11 +143,24 @@ function update(dt) {
 
 /* ---------------- 场景与行走 ---------------- */
 function enterScene(id, pos) {
+  /* 场景 id 兜底：旧版对非法 id 只是让 GS.scene 变成 undefined 而不报错，
+   * 随后 renderHud 读 GS.scene.name 每帧抛异常，玩家永久黑屏且无按键可救
+   * （Esc 只是切模式，场景仍是 undefined）。这里统一回落到村庄。 */
+  if (!Maps.scenes[id]) {
+    console.warn("enterScene: 未知场景 " + JSON.stringify(id) + "，回落到 village");
+    id = "village";
+    pos = Maps.scenes.village.start;
+  }
   GS.sceneId = id;
   GS.scene = Maps.scenes[id];
   /* pos 为“脚底所在瓦片”坐标：精灵上左角 = 瓦片位置 − (8, 8)，
    * 使 py+20 / px+8 的脚底判定正好落在目标瓦片上 */
-  if (pos) { GS.px = pos[0] * TILE - 8; GS.py = pos[1] * TILE - 8; }
+  if (pos && isFinite(pos[0]) && isFinite(pos[1])) {
+    GS.px = pos[0] * TILE - 8; GS.py = pos[1] * TILE - 8;
+  } else {
+    const st = Maps.scenes[id].start || [1, 1];
+    GS.px = st[0] * TILE - 8; GS.py = st[1] * TILE - 8;
+  }
   GS.encounterMeter = 0;
   /* 预置跟随者轨迹：入队/切场景后沈月立刻站在主角身后，
    * 而不是要等走满 17 帧才出现。方向决定"身后"的偏移。 */
@@ -413,11 +463,45 @@ function onKeyUp(e) {
 }
 
 /* ---------------- 渲染：主分发 ---------------- */
-/* 高清渲染：逻辑坐标仍是 320×200，主画布按 RS 倍采样。
- * 每帧先把变换矩阵设为 RS 倍缩放，之后所有绘制代码（瓦片/精灵/UI/文字）
- * 继续用虚拟单位，无需改动即可渲染到高清画布。 */
+/* 高清渲染：逻辑坐标仍是 320×200，主画布按 renderScale 倍采样。
+ * 每帧先把变换矩阵设为 renderScale 倍缩放，之后所有绘制代码（瓦片/精灵/
+ * UI/文字）继续用虚拟单位，无需改动即可渲染到高清画布。
+ * renderScale 由 fitScale() 按「窗口 × DPR」反算，不再是固定的 RS —— 这样
+ * 任何分辨率下后备像素与逻辑像素都是整数倍，不会出现非整数拉伸的模糊。 */
+
+/* 瓦片预烘焙缓存：高清源图是 192×192，而每个瓦片只占 TILE×renderScale
+ * （4K 下 160×160）物理像素。若每帧让 drawImage 现缩，实测 300 次缩放
+ * 要 7.7ms 而 1:1 拷贝只要 0.4ms —— 4K 全屏渲染被拖到 30ms/帧。
+ * 这里在 renderScale 变化时把每张瓦片预先缩放到目标尺寸，之后每帧都是
+ * 原生拷贝。缓存按「renderScale + 瓦片名」失效重建，resize 时只付一次代价。 */
+const tileCache = { scale: -1, src: null, map: Object.create(null) };
+
+function bakeTiles() {
+  if (tileCache.scale === renderScale && tileCache.src === Art.tiles) return;
+  tileCache.scale = renderScale;
+  tileCache.src = Art.tiles;
+  tileCache.map = Object.create(null);
+  const px = Math.max(1, Math.round(TILE * renderScale));
+  for (const name in Art.tiles) {
+    const img = Art.tiles[name];
+    if (!img) continue;
+    const c = document.createElement("canvas");
+    c.width = px; c.height = px;
+    const g = c.getContext("2d");
+    g.imageSmoothingEnabled = true;      // 缩小时平滑，避免摩尔纹
+    g.drawImage(img, 0, 0, px, px);
+    tileCache.map[name] = c;
+  }
+}
+
+/* 取一个已烘焙到当前 renderScale 的瓦片；没有高清资产时返回 null */
+function bakedTile(name) {
+  if (!Art.tiles[name]) return null;
+  return tileCache.map[name] || null;
+}
+
 function render() {
-  ctx.setTransform(RS, 0, 0, RS, 0, 0);
+  ctx.setTransform(renderScale, 0, 0, renderScale, 0, 0);
   ctx.fillStyle = "#000"; ctx.fillRect(0, 0, VW, VH);
   switch (GS.mode) {
     case "title":   renderTitle(); break;
@@ -441,6 +525,7 @@ function renderWalk() {
   const tx0 = Math.floor(ox / TILE), ty0 = Math.floor(oy / TILE);
 
   /* 瓦片层：优先高清美术资产，未就绪/缺失时回退程序化像素画 */
+  bakeTiles();                 // 缩放倍率变了就重建一次预烘焙缓存
   const waterFrame = Math.floor(GS.tick / 400) % 2;
   for (let ty = ty0; ty <= ty0 + VIEW_TH + 1; ty++) {
     for (let tx = tx0; tx <= tx0 + VIEW_TW + 1; tx++) {
@@ -448,9 +533,10 @@ function renderWalk() {
       if (!t) continue;
       const pat = t.pat === "water" ? "water" + waterFrame : t.pat;
       /* 资产清单键全小写（chestopen），TILES 表用驼峰（chestOpen）：两键都查 */
-      const hd = Art.tiles[pat] || Art.tiles[pat.toLowerCase()];
-      if (hd) {                       // 高清贴图：已是 TILE*RS 物理像素，1:1 绘制
-        ctx.imageSmoothingEnabled = true;
+      const hdName = Art.tiles[pat] ? pat : (Art.tiles[pat.toLowerCase()] ? pat.toLowerCase() : null);
+      const hd = hdName ? bakedTile(hdName) : null;
+      if (hd) {                       // 预烘焙贴图：已是目标物理尺寸，1:1 拷贝
+        ctx.imageSmoothingEnabled = false;
         ctx.drawImage(hd, tx * TILE - ox, ty * TILE - oy, TILE, TILE);
       } else {
         const img = Pat.tiles[pat];
@@ -493,7 +579,6 @@ function renderWalk() {
   if (GS.mode === "dialog") renderDialog();
   if (GS.mode === "shop") renderShop();
   if (GS.mode === "status") renderStatus();
-  if (GS.mode === "gameover") renderGameOver();
 }
 
 /* 角色精灵取用：高清层优先（带 _hd 标记供平滑开关判断），否则程序化像素画 */
@@ -535,22 +620,44 @@ function renderDialog() {
   uiBox(8, VH - 62, VW - 16, 54);
   if (line.name) text("【" + line.name + "】", 16, VH - 56);
   const shown = line.text.slice(0, Math.floor(Dlg.chars));
-  wrapText(shown, 16, VH - 44, VW - 32);
+  /* 面板内可容纳 3 行（156/168/180），第 4 行会顶到面板外并与「▼」重叠 */
+  wrapText(shown, 16, VH - 44, VW - 32, 3);
   if (Dlg.chars >= line.text.length) {
     const blink = Math.floor(GS.tick / 300) % 2;
     if (!blink) text("▼", VW - 24, VH - 16, "#d8c890");
   }
 }
 
-function wrapText(s, x, y, w) {
-  /* 简易中日文换行：按字符测量 */
-  let line = "", cy = y;
+function wrapText(s, x, y, w, maxLines) {
+  /* 简易中日文换行：按字符测量。
+   *
+   * 旧版两个缺陷（均已实测复现）：
+   * 1) 测量字体没重置 —— ctx.font 沿用了上一次 text() 调用留下的值。战斗消息框
+   *    里前面刚画过 "7px sans-serif" 的敌人名，于是按 7px 折行、却由 text()
+   *    按 9px 绘制，实际行宽 183px 而容器只有 140px，横向溢出 43px。
+   * 2) 超宽时把"当前行 + 触发超宽的那个字"整行画出，再把 line 重置成该字，
+   *    这个字于是在两行各出现一次（实测「升到 3 级」被画成「升到」+「到 3 级」）。
+   * 现在显式设定字体，并且先判断再加字，绝不重复绘制；另加 maxLines 截断，
+   * 避免长文本一路画到画布外。返回实际行数。 */
+  const prevFont = ctx.font;
+  ctx.font = "9px 'Courier New', monospace";
+  const limit = maxLines > 0 ? maxLines : 999;
+  const rows = [];
+  let line = "";
   for (const ch of s) {
-    if (ch === "\n") { text(line, x, cy); line = ""; cy += 12; continue; }
-    line += ch;
-    if (ctx.measureText(line).width > w) { text(line, x, cy); line = ch; cy += 12; }
+    if (ch === "\n") { rows.push(line); line = ""; continue; }
+    if (line && ctx.measureText(line + ch).width > w) { rows.push(line); line = ch; }
+    else line += ch;
   }
-  if (line) text(line, x, cy);
+  if (line || !rows.length) rows.push(line);
+  let out = rows;
+  if (rows.length > limit) {
+    out = rows.slice(0, limit);
+    out[limit - 1] = out[limit - 1].slice(0, -1) + "…";
+  }
+  out.forEach((r, i) => text(r, x, y + i * 12));
+  ctx.font = prevFont;
+  return out.length;
 }
 
 function renderShop() {
@@ -594,16 +701,15 @@ function renderStatus() {
 }
 
 function renderHud() {
-  /* 左上角迷你地名条 */
+  /* 左上角迷你地名条。GS.scene 理论上由 enterScene 保证非空，
+   * 但渲染层不该因为一个空值把整个主循环打挂，这里做最后一层兜底。 */
+  const scName = GS.scene ? GS.scene.name : "？？？";
+  const p0 = GS.party && GS.party[0];
   ctx.fillStyle = "#000000a0"; ctx.fillRect(0, 0, VW, 11);
-  text(GS.scene.name + "   金 " + GS.gold + "   Lv" + (GS.party[0] ? GS.party[0].level : 1),
+  text(scName + "   金 " + GS.gold + "   Lv" + (p0 ? p0.level : 1),
        4, 2, "#d8c890");
-}
-
-function renderGameOver() {
-  ctx.fillStyle = "#100408"; ctx.fillRect(0, 0, VW, VH);
-  text("· 全 体 覆 没 ·", 112, 76, "#e06060");
-  text("按空格回到落霞村", 104, 100, "#a8a8b0");
+  /* 音乐开关状态：旧版按 N 切换后界面毫无反馈，玩家无法确认是否生效 */
+  if (!GS.musicOn) text("♪ 关", VW - 26, 2, "#8a8aa0");
 }
 
 /* ---------------- 标题 / 结局 ---------------- */
@@ -634,7 +740,9 @@ function renderTitle() {
   /* 标题匾额 */
   uiBox(58, 22, 204, 46);
   text("落 霞 剑 缘", 96, 30, "#ffe8c0", "bold 26px 'Courier New', monospace");
-  text("—— 经典 J-RPG 引擎复刻 · 原创致敬版 ——", 30, 62, "#d8b8e8");
+  /* 副标题必须落在匾额下边框（y=68）之外：旧版画在 y=62，字高约 11，
+   * 下沿压进边框 6px；而且整行宽 250px 比匾额的 204px 还宽，两头露出框外。 */
+  text("—— 经典 J-RPG 引擎复刻 · 原创致敬版 ——", 30, 76, "#d8b8e8");
   const blink = Math.floor(GS.tick / 500) % 2;
   if (!blink) text("回车 / 空格 开始新游戏      C 继续游戏", 52, 168, "#fff");
   text("机制致敬 · 内容全部原创", 84, 184, "#b09090");
@@ -721,22 +829,101 @@ const Audio = {
 };
 
 /* ---------------- 存档 ---------------- */
+/* 存档校验：旧版用 Object.assign 把存档字段整体覆盖到 GS 上，
+ * 存档里缺失/为 null 的键会一并写成 undefined（覆盖掉 mainStart 刚初始化
+ * 好的默认值），随后主循环每帧抛 "Cannot read properties of undefined"，
+ * 画面永久冻结；而 5 秒自动存档又会把这种残缺状态写回磁盘（JSON.stringify
+ * 丢弃 undefined 键），导致原数据永久丢失。以下三个函数是统一的出入口。 */
+
+/* 队伍成员重建：只信任 id 与数值字段，其余形状由 makeActor 保证。
+ * 旧档里若缺 magic/xp 等字段，直接回退到该角色的初始值。 */
+function sanitizeParty(raw) {
+  if (!Array.isArray(raw) || !raw.length) return null;
+  const out = [];
+  for (const p of raw) {
+    if (!p || typeof p !== "object") return null;
+    const base = Data.LEVELS.party[p.id];
+    if (!base) return null;                       // 未知角色 id
+    const a = makeActor(p.id);
+    const num = (v, d) => (typeof v === "number" && isFinite(v) ? v : d);
+    a.level = Math.max(1, Math.round(num(p.level, a.level)));
+    a.xp = Math.max(0, num(p.xp, a.xp));
+    a.maxHp = Math.max(1, Math.round(num(p.maxHp, a.maxHp)));
+    a.hp = Math.max(0, Math.min(a.maxHp, Math.round(num(p.hp, a.maxHp))));
+    a.maxMp = Math.max(0, Math.round(num(p.maxMp, a.maxMp)));
+    a.mp = Math.max(0, Math.min(a.maxMp, Math.round(num(p.mp, a.maxMp))));
+    a.atk = Math.max(1, Math.round(num(p.atk, a.atk)));
+    a.def = Math.max(0, Math.round(num(p.def, a.def)));
+    a.spd = Math.max(1, Math.round(num(p.spd, a.spd)));
+    /* 法术表以 data.js 为准，但要并上存档里已学会的（等级回退时不丢技能） */
+    if (Array.isArray(p.magic)) {
+      for (const m of p.magic) if (Data.MAGIC[m] && !a.magic.includes(m)) a.magic.push(m);
+    }
+    out.push(a);
+  }
+  return out;
+}
+
+/* 校验一份存档对象，返回可安全应用的字段；不合格返回 null */
+function validateSave(s) {
+  if (!s || typeof s !== "object") return null;
+  if (!Maps.scenes[s.sceneId]) return null;       // 未知场景
+  const party = sanitizeParty(s.party);
+  if (!party) return null;                        // 队伍缺失/损坏
+  const items = (s.items && typeof s.items === "object") ? s.items : {};
+  const flags = (s.flags && typeof s.flags === "object") ? s.flags : {};
+  /* 只保留认识的道具与正数数量 */
+  const cleanItems = {};
+  for (const id in items) {
+    const n = items[id];
+    if (Data.ITEMS[id] && typeof n === "number" && n > 0) cleanItems[id] = Math.floor(n);
+  }
+  return {
+    sceneId: s.sceneId,
+    px: (typeof s.px === "number" && isFinite(s.px)) ? s.px : null,
+    py: (typeof s.py === "number" && isFinite(s.py)) ? s.py : null,
+    dir: [0, 1, 2, 3].includes(s.dir) ? s.dir : 0,
+    gold: (typeof s.gold === "number" && isFinite(s.gold)) ? Math.max(0, Math.floor(s.gold)) : 0,
+    items: cleanItems,
+    flags: flags,
+    party: party,
+    musicOn: typeof s.musicOn === "boolean" ? s.musicOn : GS.musicOn
+  };
+}
+
+/* 把校验过的存档应用到 GS */
+function applySave(v) {
+  GS.gold = v.gold;
+  GS.items = v.items;
+  GS.flags = v.flags;
+  GS.party = v.party;
+  GS.dir = v.dir;
+  GS.musicOn = v.musicOn;
+  /* 坐标缺失时传 null，让 enterScene 用场景出生点 —— 传 [0,0] 会被当成
+   * 合法坐标，把角色丢到地图左上角（px = -8）。 */
+  const hasPos = v.px !== null && v.py !== null;
+  enterScene(v.sceneId, hasPos ? [v.px / TILE, v.py / TILE] : null);
+  if (hasPos) { GS.px = v.px; GS.py = v.py; }
+}
+
 function saveGame() {
   try {
+    /* 守卫：队伍不合法时绝不写盘，避免把坏状态"洗白"成永久丢档 */
+    if (!Array.isArray(GS.party) || !GS.party.length) return;
+    if (!Maps.scenes[GS.sceneId]) return;
     localStorage.setItem("luoxia_save", JSON.stringify({
-      sceneId: GS.sceneId, px: GS.px, py: GS.py,
+      v: 2,
+      sceneId: GS.sceneId, px: GS.px, py: GS.py, dir: GS.dir,
       gold: GS.gold, items: GS.items, flags: GS.flags,
-      party: GS.party
+      party: GS.party, musicOn: GS.musicOn
     }));
   } catch (e) {}
 }
 function loadGame() {
   try {
-    const s = JSON.parse(localStorage.getItem("luoxia_save"));
-    if (!s) return false;
-    Object.assign(GS, { gold: s.gold, items: s.items, flags: s.flags, party: s.party });
-    enterScene(s.sceneId, [s.px / TILE, s.py / TILE]);
-    GS.px = s.px; GS.py = s.py;
+    const v = validateSave(JSON.parse(localStorage.getItem("luoxia_save")));
+    if (!v) return false;
+    applySave(v);
     return true;
   } catch (e) { return false; }
 }
@@ -755,12 +942,16 @@ function slotMeta(i) {
 }
 function saveSlot(i) {
   try {
+    /* 同 saveGame 的守卫：坏状态不入库 */
+    if (!Array.isArray(GS.party) || !GS.party.length) return false;
+    if (!Maps.scenes[GS.sceneId]) return false;
     const p0 = GS.party[0] || {};
     const pack = {
       meta: { ts: Date.now(), sceneName: GS.scene ? GS.scene.name : "",
               level: p0.level || 1, gold: GS.gold, nParty: GS.party.length },
       data: { sceneId: GS.sceneId, px: GS.px, py: GS.py, dir: GS.dir,
-              gold: GS.gold, items: GS.items, flags: GS.flags, party: GS.party }
+              gold: GS.gold, items: GS.items, flags: GS.flags, party: GS.party,
+              musicOn: GS.musicOn }
     };
     localStorage.setItem(SLOT_PREFIX + i, JSON.stringify(pack));
     return true;
@@ -770,10 +961,9 @@ function loadSlot(i) {
   try {
     const s = JSON.parse(localStorage.getItem(SLOT_PREFIX + i));
     if (!s || !s.data) return false;
-    const d = s.data;
-    Object.assign(GS, { gold: d.gold, items: d.items, flags: d.flags, party: d.party });
-    enterScene(d.sceneId, [d.px / TILE, d.py / TILE]);
-    GS.px = d.px; GS.py = d.py; GS.dir = d.dir || 0;
+    const v = validateSave(s.data);
+    if (!v) return false;                         // 损坏的槽位：拒绝载入
+    applySave(v);
     return true;
   } catch (e) { return false; }
 }

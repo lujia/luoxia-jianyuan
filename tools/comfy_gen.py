@@ -8,12 +8,16 @@ import argparse
 import json
 import os
 import sys
+import os
 import time
 import urllib.request
 import urllib.error
 
 SERVER = "http://127.0.0.1:8188"
-OUT_DIR = "/home/jia/ComfyUI/output"
+# ComfyUI 的输出目录。旧版写死 /home/jia/ComfyUI/output，换台机器就跑不了；
+# 现在优先读环境变量 COMFY_OUTPUT，否则用 ~/ComfyUI/output（ComfyUI 默认布局）。
+OUT_DIR = os.environ.get("COMFY_OUTPUT") or os.path.join(
+    os.path.expanduser("~"), "ComfyUI", "output")
 
 UNET = "qwen_image_2.1_int8_convrot.safetensors"
 CLIP_VL = "qwen3vl_8b_int8_convrot.safetensors"

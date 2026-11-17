@@ -85,8 +85,7 @@ function buildMgo() {
     master:{ skin:"#e0b088", hair:"#d8d8e0", cloth:"#6a5a9a", cloth2:"#4c3e74", belt:"#8a5a36", trim:"#c8b8f0" },
     smith: { skin:"#d8a878", hair:"#2c2018", cloth:"#5a5a66", cloth2:"#3c3c46", belt:"#26262e", trim:"#8a8a96" },
     doc:   { skin:"#e8c8a8", hair:"#88846a", cloth:"#3c6a4c", cloth2:"#2a4c38", belt:"#8a5a36", trim:"#a8d8b0" },
-    kid:   { skin:"#f0c8a0", hair:"#141210", cloth:"#e8a84a", cloth2:"#b07c2c", belt:"#7c5424", trim:"#f8e8b8" },
-    yue2:  { skin:"#f0c8a0", hair:"#3a2414", cloth:"#b0485a", cloth2:"#7c2c3c", belt:"#d8b04a", trim:"#f0a8b8" }
+    kid:   { skin:"#f0c8a0", hair:"#141210", cloth:"#e8a84a", cloth2:"#b07c2c", belt:"#7c5424", trim:"#f8e8b8" }
   };
   for (const id in cast) {
     Mgo.sprites[id] = {};

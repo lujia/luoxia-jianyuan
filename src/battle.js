@@ -31,7 +31,6 @@ const Battle = {
     this.actorIdx = 0; this.phase = "menu";
     GS.mode = "battle";
     Audio.play(isBoss ? "boss" : "battle");
-    GS.pendingCommands = [];
   },
 
   buildTurnOrder() {
@@ -178,8 +177,6 @@ const Battle = {
     } else if (it.type === "mp") {
       t.a.mp = Math.min(t.a.maxMp, t.a.mp + it.mp);
       this.showMsg(t.a.name + " 服下" + it.name + "，恢复 " + it.mp + " 点真气。");
-    } else if (it.type === "cure") {
-      this.showMsg(t.a.name + " 服下" + it.name + "，气息平复了些。");
     } else if (it.type === "dmg") {
       const target = this.pickEnemy();
       if (!target) return;
@@ -196,7 +193,13 @@ const Battle = {
   execFlee(t) {
     const spd = GS.party.reduce((s, a) => s + a.spd, 0);
     const espd = this.enemies.filter(e => e.alive).reduce((s, e) => s + e.spd, 0);
-    const chance = this.isBoss ? 0 : Math.min(0.9, 0.45 + (spd - espd) * 0.04);
+    /* Boss 战不可逃：旧版 chance 恒为 0 却仍让玩家选，选了只白费一回合，
+     * 且没有任何提示说明"这场逃不掉"。现在直接拒绝并给出理由，不消耗回合。 */
+    if (this.isBoss) {
+      this.hintMsg("妖气封锁了退路——无法逃跑！");
+      return;
+    }
+    const chance = Math.min(0.9, 0.45 + (spd - espd) * 0.04);
     if (Math.random() < chance) {
       this.finished = true; this.fled = true;
       this.msg = "成功脱离了战斗！"; this.resultT = 800;
@@ -426,47 +429,77 @@ const Battle = {
 
     /* 状态板（右上） */
     const n = GS.party.length;
-    uiBox(170, 16, 142, n * 26 + 22);
+    const statusH = n * 26 + 22;
+    uiBox(170, 16, 142, statusH);
     GS.party.forEach((a, i) => {
       text(a.name + " Lv" + a.level, 176, 22 + i * 26, a.hp <= 0 ? "#805050" : "#f0ead0");
       text(a.hp + "/" + a.maxHp, 176, 34 + i * 26, "#e8a8a8");
       text("气 " + a.mp, 246, 34 + i * 26, "#a8c8f0");
     });
 
-    /* 消息条（左下，限宽避免压住立绘；最多三行） */
+    /* 消息条（左下）。旧版 (8,136,152,36) 内高只有 30px，装不下 2 行以上，
+     * 而升级播报实测 4 行 —— 文字直接溢出到画布外。现在放宽到 4 行。 */
     if (this.msg) {
-      uiBox(8, 136, 152, 36);
-      wrapText(this.msg, 14, 142, 140);
+      uiBox(8, 136, 152, 56);
+      wrapText(this.msg, 14, 142, 140, 4);
     }
 
-    /* 指令菜单（状态板下方右列） */
+    /* 指令菜单：状态板正下方。
+     * 旧版 top = 20+n*26，与状态板底边 38+26n 恒差 18px，任何队伍都重叠；
+     * 现在留 4px 间隙，且整个右列从 top 起算，子菜单原地覆盖而不另起一块。 */
     const t = this.currentActor();
     if (!this.finished && t && t.side === "ally" && this.msgT <= 0) {
-      const top = 20 + n * 26;
-      uiBox(170, top, 142, 74);
-      text("▸" + t.a.name, 176, top + 4, "#ffe89a");
-      const menus = ["攻击", "法术", "物品", "逃跑"];
-      menus.forEach((m, i) => {
-        text((this.phase === "menu" && this.sel === i ? "▶" : "  ") + m,
-             178, top + 18 + i * 12,
-             this.phase === "menu" && this.sel === i ? "#ffe89a" : "#d0d0d8");
-      });
-      if (this.phase === "magic") {
-        uiBox(170, top + 82, 142, t.a.magic.length * 14 + 20);
-        t.a.magic.forEach((m, i) => {
-          const sp = Data.MAGIC[m];
-          text((this.sel === i ? "▶" : "  ") + sp.name + " 气" + sp.mp,
-               178, top + 86 + i * 14, this.sel === i ? "#ffe89a" : "#c8b8e8");
-        });
-        text(Data.MAGIC[t.a.magic[this.sel]].desc.slice(0, 14),
-             178, top + 86 + t.a.magic.length * 14 + 2, "#8a8aa0");
-      }
-      if (this.phase === "item") {
-        const inv = this.battleItems();
-        uiBox(170, top + 82, 142, Math.max(1, inv.length) * 14 + 20);
-        inv.forEach((id, i) => {
-          text((this.sel === i ? "▶" : "  ") + Data.ITEMS[id].name + " ×" + GS.items[id],
-               178, top + 86 + i * 14, this.sel === i ? "#ffe89a" : "#f0ead0");
+      const top = 16 + statusH + 4;          // 状态板底 + 4px 间隙
+      const availH = VH - top - 4;           // 右列可用高度
+      if (this.phase === "magic" || this.phase === "item") {
+        /* 法术 / 物品子菜单：占用整条右列，行数超出可视区时滚动跟随光标。
+         * 旧版固定在 top+82 处向下排，5 种道具时面板底 244（画布只有 200），
+         * 最后几种道具永远看不见。 */
+        const rows = this.phase === "magic"
+          ? t.a.magic.map(id => ({ id, label: (() => {
+              const sp = Data.MAGIC[id];
+              return sp.name + " 气" + sp.mp;
+            })() }))
+          : this.battleItems().map(id => ({
+              id, label: Data.ITEMS[id].name + " ×" + GS.items[id]
+            }));
+        const maxRows = Math.max(1, Math.floor((availH - 18 - 12) / 14));
+        const shown = Math.min(rows.length, maxRows);
+        const scrolling = rows.length > maxRows;
+        /* 滚动窗口：保证光标始终可见 */
+        let first = 0;
+        if (scrolling) {
+          first = Math.min(Math.max(0, this.sel - maxRows + 1), rows.length - maxRows);
+        }
+        /* 面板高度：标题 18 + 行数*14 + 底部附注 12（滚动提示或法术说明） */
+        const needBottom = scrolling || this.phase === "magic";
+        const panelH = Math.min(availH, 18 + shown * 14 + (needBottom ? 12 : 0));
+        uiBox(170, top, 142, panelH);
+        text(this.phase === "magic" ? "· 法术 ·" : "· 物品 ·", 176, top + 4, "#ffe89a");
+        for (let i = 0; i < shown; i++) {
+          const idx = first + i;
+          const r = rows[idx];
+          if (!r) break;
+          const on = this.sel === idx;
+          text((on ? "▶" : "  ") + r.label, 178, top + 18 + i * 14,
+               on ? "#ffe89a" : (this.phase === "magic" ? "#c8b8e8" : "#f0ead0"));
+        }
+        const footY = top + 18 + shown * 14;
+        if (scrolling) {
+          text("（" + (first + 1) + "-" + (first + shown) + "/" + rows.length + "）",
+               210, footY, "#8a8aa0");
+        } else if (this.phase === "magic" && rows[this.sel]) {
+          const sp = Data.MAGIC[rows[this.sel].id];
+          text(sp.desc.slice(0, 14), 178, footY, "#8a8aa0");
+        }
+      } else {
+        uiBox(170, top, 142, 74);
+        text("▸" + t.a.name, 176, top + 4, "#ffe89a");
+        const menus = ["攻击", "法术", "物品", "逃跑"];
+        menus.forEach((m, i) => {
+          text((this.phase === "menu" && this.sel === i ? "▶" : "  ") + m,
+               178, top + 18 + i * 12,
+               this.phase === "menu" && this.sel === i ? "#ffe89a" : "#d0d0d8");
         });
       }
     }

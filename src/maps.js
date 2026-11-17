@@ -6,7 +6,12 @@
  * 全部 40 列宽），洞窟用程序化“挖洞”生成。场景、地名、布局均为原创。
  *
  * 图例： G草 f花 P路 W水 T树 R岩 H房墙 r屋顶 D门 S牌
- *        C宝箱 c空箱 .洞地 #洞壁 V洞口 L出口 B桥 s碑
+ *        C宝箱 c空箱 .洞地 #洞壁 V洞口 L出口 s碑
+ *
+ * 注意：pat.js / 资产清单里还有一个 "bridge" 木桥瓦片，但 TILES 表从未映射它
+ * （旧版图例曾写「B桥」，实际没有任何地图使用 B），属不可达的美术资源。
+ * 保留它的唯一理由是 assets/ 里的成品 png —— 若要删，需连同
+ * assets/raw/tiles/bridge.png、gen_assets.py 的提示词、art_manifest.js 一起清。
  * ========================================================================= */
 "use strict";
 
@@ -129,7 +134,11 @@ Maps.scenes = {
       "T" + "G".repeat(30) + "f" + "GGGGG" + "TTT",
       "TT"+"GGGGGG"+"f"+"GGGGGG"+"WWWWWW"+"G".repeat(17)+"TT",
       "TTT"+"G".repeat(10)+"WWWWWWWW"+"G".repeat(12)+"f"+"GGG"+"TTT",
-      "TTTT"+"GGGGGG"+"f"+"GG"+"WWW"+"GG"+"WWW"+"G".repeat(11)+"f"+"GGG"+"TTTT",
+      /* 池塘（x13-20, y11-14）。旧版这一行中间留了 "GG" 两格草地，
+       * 四面被水围死 → 成为永远走不到、也看不出用途的孤岛
+       * （BFS 实测：可行走 485 格中 483 可达，孤岛 (16,13)(17,13)）。
+       * 填成水面后池塘完整闭合。 */
+      "TTTT"+"GGGGGG"+"f"+"GG"+"WWWWWWWW"+"G".repeat(11)+"f"+"GGG"+"TTTT",
       "TTTTT"+"GGGGGGGG"+"WWWWWWWW"+"G".repeat(9)+"f"+"GGGG"+"T".repeat(5),
       "TTTTT"+"f"+"G".repeat(31)+"TTT",
       "TTTTTT"+"G".repeat(26)+"f"+"GGGG"+"TTT",

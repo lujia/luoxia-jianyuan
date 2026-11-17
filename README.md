@@ -41,7 +41,7 @@ src/
   battle.js         回合制战斗系统
   main.js           启动流程与自动存档
 tools/
-  smoke_test.js     Node 冒烟测试（76 项断言 + 2000 次随机模糊）
+  smoke_test.js     Node 冒烟测试（92 项断言 + 2000 次随机模糊）
   verify_maps.js    地图可达性校验
   build_assets.py   生成式美术后处理（抠图、缩放、切帧）
   gen_assets.py     美术资产生成
@@ -51,7 +51,7 @@ qa/                 开发期视觉验证截图
 ## 测试
 
 ```bash
-node tools/smoke_test.js    # 76 项断言 + 2000 次模糊操作
+node tools/smoke_test.js    # 92 项断言 + 2000 次模糊操作
 node tools/verify_maps.js   # 地图可达性
 ```
 

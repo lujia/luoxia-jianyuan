@@ -14,13 +14,17 @@ const Data = {
   BEATS: { bolt:"ice", ice:"fire", fire:"bolt" },   // 键克制值
 
   /* ---- 物品（原创） ---- */
+  /* 道具表。注意：这里只放「玩家真的能拿到、且真的有效果」的东西 ——
+   * 旧版还有一项 antidote「清心散」（type:"cure"），但它既不在商店货单里、
+   * 也不在任何宝箱里，而 GS 里根本没有状态异常字段，战斗中使用只弹一句
+   * 「气息平复了些」。属于永远拿不到、拿到了也没用的死数据，已删除。
+   * 若将来要加状态异常系统，请连同货单/宝箱/结算一起补齐。 */
   ITEMS: {
     huangChuang:  { name:"金创药",  desc:"恢复 60 点生命。",        type:"heal",  hp:60,  price:20 },
     huiYuan:      { name:"回元丹",  desc:"恢复 30 点真气。",        type:"mp",    mp:30,  price:25 },
     baiLuOint:    { name:"白露膏",  desc:"恢复 150 点生命。",       type:"heal",  hp:150, price:60 },
     fireCharm:    { name:"炎符",    desc:"投掷造成火元素伤害。",    type:"dmg",   elem:"fire", power:40, price:35 },
     boltCharm:    { name:"雷符",    desc:"投掷造成雷元素伤害。",    type:"dmg",   elem:"bolt", power:40, price:35 },
-    antidote:     { name:"清心散",  desc:"解除异常状态。",          type:"cure",  price:15 },
     snowLotus:    { name:"雪莲",    desc:"师父所需的灵药，尚未交付。", type:"quest", price:0 }
   },
 

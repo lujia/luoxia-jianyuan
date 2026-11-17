@@ -502,6 +502,108 @@ try {
   G.GS.mode = "walk";
 } catch (e) { crash(e, "10.7 任务道具"); }
 
+/* ================= 10.9 坏存档健壮性（白屏 / 丢档回归） ================= */
+/* 回归：旧版 loadGame 用 Object.assign 整体覆盖，存档里缺 flags/party 时会
+ * 把 undefined 写进 GS，主循环每帧抛异常、画面永久冻结；而 5 秒自动存档
+ * 又把残缺状态写回磁盘，把好档"洗白"成永久丢档。以下逐条锁定修复。 */
+console.log("\n[10.9] 坏存档健壮性（不得白屏、不得洗白好档）");
+try {
+  const raw = globalThis.localStorage;
+  const setSave = o => raw.setItem("luoxia_save", JSON.stringify(o));
+  /* 一份合法基准存档 */
+  const goodParty = G.GS.party.map(a => ({
+    id: a.id, level: a.level, xp: a.xp, maxHp: a.maxHp, hp: a.hp,
+    maxMp: a.maxMp, mp: a.mp, atk: a.atk, def: a.def, spd: a.spd,
+    magic: a.magic.slice()
+  }));
+  const good = { sceneId: "village", px: 136, py: 248, gold: 123,
+                 items: { huangChuang: 2 }, flags: { quest: true },
+                 party: goodParty };
+  setSave(good);
+  ok(G.loadGame() === true, "合法存档可正常载入（前置）");
+
+  /* --- 结构性损坏：必须整份拒绝（载入后必然白屏或丢档） --- */
+  const fatalCases = [
+    ["空对象", {}],
+    ["缺 party", { sceneId: "village", px: 136, py: 248, gold: 1, items: {}, flags: {} }],
+    ["party 为空数组", { sceneId: "village", px: 136, py: 248, gold: 1, items: {}, flags: {}, party: [] }],
+    ["party 含未知角色", { sceneId: "village", px: 136, py: 248, gold: 1, items: {}, flags: {},
+                          party: [{ id: "nobody" }] }],
+    ["非法场景名", { sceneId: "no_such_scene", px: 0, py: 0, gold: 1, items: {}, flags: {}, party: goodParty }],
+    ["null 值", { sceneId: null, px: null, py: null, gold: null, items: null, flags: null, party: null }]
+  ];
+  let allRejected = true;
+  for (const [name, obj] of fatalCases) {
+    setSave(obj);
+    if (G.loadGame()) { allRejected = false; console.log("    ✗ 未拒绝：" + name); }
+  }
+  ok(allRejected, "6 种结构性损坏的存档全部被拒绝载入（旧版会接受并白屏）");
+
+  /* --- 可修复缺失：应当接受，并由校验层补齐默认值 --- */
+  const repairCases = [
+    ["缺 flags", { sceneId: "village", px: 136, py: 248, gold: 1, items: {}, party: goodParty }, "flags"],
+    ["缺 items", { sceneId: "village", px: 136, py: 248, gold: 1, flags: {}, party: goodParty }, "items"]
+  ];
+  let allRepaired = true;
+  for (const [name, obj, field] of repairCases) {
+    setSave(obj);
+    const loaded = G.loadGame();
+    const v = G.GS[field];
+    if (!loaded || !v || typeof v !== "object" || Array.isArray(v)) {
+      allRepaired = false; console.log("    ✗ 未补齐：" + name);
+    }
+  }
+  ok(allRepaired, "缺 flags / items 的存档可安全载入并补齐为空对象");
+
+  /* --- 坏档被拒后，GS 必须仍然可渲染、可更新 --- */
+  setSave({});
+  G.mainStart(true);                       /* 按 C 继续：loadGame 失败 → 走新游戏 */
+  let noThrow = true;
+  try { for (let i = 0; i < 30; i++) { G.update(16); G.render(); } }
+  catch (e) { noThrow = false; console.log("    ✗ 渲染抛错：" + e.message); }
+  ok(noThrow, "拒绝坏档后连续 30 帧渲染/更新无异常（旧版抛 reading 'joined'）");
+  ok(!!G.GS.scene && Array.isArray(G.GS.party) && G.GS.party.length > 0,
+     "GS.scene 与 GS.party 均有效");
+
+  /* --- 关键回归：自动存档不得把坏状态写回磁盘 --- */
+  setSave(good);
+  G.loadGame();
+  const before = raw.getItem("luoxia_save");
+  G.GS.party = undefined;                  /* 模拟运行期被污染 */
+  G.saveGame();
+  ok(raw.getItem("luoxia_save") === before,
+     "队伍损坏时 saveGame 拒绝写盘（旧版会覆盖成丢 party 的残缺档）");
+  G.GS.party = G.loadGame() && G.GS.party;  /* 恢复 */
+
+  /* --- 非法场景槽位：loadSlot 必须返回 false，且不切模式 --- */
+  raw.setItem("luoxia_slot1", JSON.stringify({
+    meta: { ts: 1, sceneName: "x", level: 1, gold: 1, nParty: 1 },
+    data: { sceneId: "no_such_scene", px: 0, py: 0, dir: 0, gold: 1,
+            items: {}, flags: {}, party: goodParty }
+  }));
+  G.GS.mode = "walk";
+  G.openSaveMenu();
+  tap("l");
+  ok(G.GS.mode === "menu", "非法槽位读档失败后仍停在菜单（旧版切 walk 后黑屏）");
+  ok(G.Menu.msg.indexOf("损坏") >= 0 || G.Menu.msg.indexOf("失败") >= 0,
+     "给出读档失败提示");
+  ok(!!G.GS.scene, "GS.scene 未被破坏");
+  G.deleteSlot(1);
+  tap("Escape");
+
+  /* --- enterScene 非法 id 必须兜底回村庄，不得留 undefined --- */
+  G.enterScene("no_such_scene", [5, 5]);
+  ok(G.GS.sceneId === "village" && !!G.GS.scene,
+     "enterScene 遇到未知场景回落到村庄（旧版留 undefined 导致永久黑屏）");
+  G.GS.mode = "walk";
+
+  /* --- 读档后 musicOn 也应恢复 --- */
+  setSave(Object.assign({}, good, { musicOn: false }));
+  G.loadGame();
+  ok(G.GS.musicOn === false, "音乐开关随存档恢复");
+  G.GS.musicOn = true;
+} catch (e) { crash(e, "10.9 坏存档"); }
+
 /* ================= 11. 随机模糊测试（死锁/异常猎手） ================= */
 console.log("\n[11] 随机模糊测试（2000 次随机操作）");
 try {
